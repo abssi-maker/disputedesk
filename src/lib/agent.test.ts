@@ -172,3 +172,27 @@ describe('run-level guarantee', () => {
     for (const id of onTime) expect(findDispute(id)!.state).not.toBe('late');
   });
 });
+
+describe('telling the agent about availability', () => {
+  it('understands plain availability instructions', async () => {
+    const { parseAvailability } = await import('./agent');
+    expect(parseAvailability('Maya leaves at 2pm today', '2026-11-12')).toEqual({ workerId: 'maya', from: '2026-11-12T14:00', to: '2026-11-12T17:00' });
+    expect(parseAvailability("I'm out 10 to 12", '2026-11-12')).toEqual({ workerId: 'owner', from: '2026-11-12T10:00', to: '2026-11-12T12:00' });
+    expect(parseAvailability('Maya is away 13:00 to 15:30', '2026-11-12')).toEqual({ workerId: 'maya', from: '2026-11-12T13:00', to: '2026-11-12T15:30' });
+    expect(parseAvailability('what is going on', '2026-11-12')).toBeNull();
+  });
+
+  it('puts the absence into the engine, which moves the work around it', async () => {
+    await runAgent('plan');
+    const mayaBlocks = () => store().disputes.flatMap((d) => d.chain).filter((t) => t.workerId === 'maya' && t.start);
+    expect(mayaBlocks().some((t) => t.start! < '2026-11-12T12:00' && t.end! > '2026-11-12T10:00')).toBe(true);
+    await runAgent('command', undefined, 'Maya is away 10:00 to 12:00');
+    expect(store().workers.find((w) => w.id === 'maya')!.away).toEqual([{ from: '2026-11-12T10:00', to: '2026-11-12T12:00', note: 'Maya is away 10:00 to 12:00' }]);
+    // The engine splits or moves Maya's work: no block of hers is worked during the gap.
+    for (const t of mayaBlocks()) {
+      const workedInGap = t.start! < '2026-11-12T12:00' && t.end! > '2026-11-12T10:00' && t.end! <= '2026-11-12T12:00';
+      expect(workedInGap).toBe(false);
+    }
+    expect(store().actions.some((a) => a.tool === 'setAvailability' && a.ok)).toBe(true);
+  });
+});

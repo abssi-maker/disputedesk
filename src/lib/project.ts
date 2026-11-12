@@ -38,11 +38,20 @@ export interface ProjectDependency {
   kind: 'chain' | 'lane';
 }
 
+export interface ProjectCalendar {
+  id: string;
+  name: string;
+  parentId?: string;
+  unspecifiedTimeIsWorking?: boolean;
+  intervals: { recurrentStartDate?: string; recurrentEndDate?: string; startDate?: WallTime; endDate?: WallTime; isWorking: boolean; name?: string }[];
+}
+
 export interface ProjectData {
   startDate: WallTime;
+  calendars: ProjectCalendar[];
   tasks: ProjectTask[];
   dependencies: ProjectDependency[];
-  resources: { id: string; name: string; role: string; kind: Worker['kind'] }[];
+  resources: { id: string; name: string; role: string; kind: Worker['kind']; calendar: string }[];
   assignments: { id: string; event: string; resource: string }[];
 }
 
@@ -103,11 +112,22 @@ export function buildProjectData(disputes: Dispute[], workers: Worker[], planFro
     }
   }
 
-  return {
-    startDate: planFrom,
-    tasks,
-    dependencies,
-    resources: workers.map((w) => ({ id: w.id, name: w.name, role: w.role, kind: w.kind })),
-    assignments,
-  };
+  return { startDate: planFrom, tasks, dependencies, assignments, ...people(workers) };
+}
+
+/** Each person gets a calendar: working hours minus the time they said they are away. */
+export function people(workers: Worker[]): Pick<ProjectData, 'calendars' | 'resources'> {
+  const calendars: ProjectCalendar[] = [WORK_CALENDAR];
+  const resources = workers.map((w) => {
+    if (!w.away?.length) return { id: w.id, name: w.name, role: w.role, kind: w.kind, calendar: WORK_CALENDAR.id };
+    const id = `cal:${w.id}`;
+    calendars.push({
+      id,
+      name: `${w.name}'s hours`,
+      parentId: WORK_CALENDAR.id,
+      intervals: w.away.map((a) => ({ startDate: a.from, endDate: a.to, isWorking: false, name: a.note ?? 'Away' })),
+    });
+    return { id: w.id, name: w.name, role: w.role, kind: w.kind, calendar: id };
+  });
+  return { calendars, resources };
 }

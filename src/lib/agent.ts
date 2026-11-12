@@ -8,7 +8,7 @@ import { lateBy, priority } from './planner';
 import { captureBaseline, findDispute, logAction, nowMs, planNow, replan, setRunning, store } from './store';
 import { EVIDENCE_SOURCES, evidenceMinutes, type Dispute, type EvidenceSource } from './types';
 
-export type Trigger = 'plan' | 'event';
+export type Trigger = 'plan' | 'event' | 'command';
 
 const MAX_TURNS = 4;
 const TURN_TIMEOUT_MS = 20_000;
@@ -25,6 +25,15 @@ const tool = (name: string, description: string, properties: Record<string, unkn
 });
 
 const TOOLS: FunctionDeclaration[] = [
+  {
+    name: 'setAvailability',
+    description: 'Record that a person is away between two times (YYYY-MM-DDTHH:mm). The scheduling engine then plans their work around it.',
+    parametersJsonSchema: {
+      type: 'object',
+      properties: { workerId: { type: 'string', enum: ['owner', 'maya'] }, from: str, to: str, note: str, reason },
+      required: ['workerId', 'from', 'to', 'reason'],
+    },
+  },
   tool(
     'setDecision',
     'Record the decision for a dispute. Call this first for every dispute that has no decision.',
@@ -120,10 +129,12 @@ const openFocus = (ids: string[]) => ids.map((id) => findDispute(id)).filter((d)
 /** Work is left when a focus dispute has no decision, or is late and not yet handed to the human. */
 const needsWork = (d: Dispute) => !d.decision || (d.state !== 'safe' && !d.flaggedForHuman);
 
-function stateMessage(focus: string[]): string {
+function stateMessage(focus: string[], instruction?: string): string {
   const s = store();
   return JSON.stringify({
+    ...(instruction ? { ownerSays: instruction, ownerIsUser: 'The owner is "owner"; Maya is "maya". Act on ownerSays first, then repair anything it made late.' } : {}),
     now: planNow(),
+    away: Object.fromEntries(s.workers.filter((w) => w.away?.length).map((w) => [w.id, w.away])),
     policy: s.policy,
     workersBusyMinutes: workload(),
     focus: openFocus(focus).map(describe),
@@ -133,10 +144,10 @@ function stateMessage(focus: string[]): string {
   });
 }
 
-async function geminiRun(focus: string[], ctx: ToolContext): Promise<void> {
+async function geminiRun(focus: string[], ctx: ToolContext, instruction?: string): Promise<void> {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
   const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const contents: Content[] = [{ role: 'user', parts: [{ text: stateMessage(focus) }] }];
+  const contents: Content[] = [{ role: 'user', parts: [{ text: stateMessage(focus, instruction) }] }];
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const res = await ai.models.generateContent({
@@ -246,13 +257,45 @@ async function heuristicRun(focus: string[], ctx: ToolContext) {
   for (const d of ordered) await heuristicFix(d.id, ctx);
 }
 
+/**
+ * Without Gemini, understand the one kind of instruction the board needs most:
+ * "Maya leaves at 2pm", "I'm out 10-12", "Maya is away from 13:00 to 15:30".
+ */
+export function parseAvailability(text: string, day: string): { workerId: string; from: string; to: string } | null {
+  const t = text.toLowerCase();
+  const workerId = /\bmaya\b/.test(t) ? 'maya' : /\b(i|i'm|im|me|my|owner)\b/.test(t) ? 'owner' : null;
+  const times = [...t.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/g)]
+    .map(([, h, m, ap]) => {
+      let hour = Number(h);
+      if (ap === 'pm' && hour < 12) hour += 12;
+      if (ap === 'am' && hour === 12) hour = 0;
+      if (!ap && hour >= 1 && hour <= 6) hour += 12; // "leaves at 2" means 14:00 in an office day
+      return hour <= 23 ? `${String(hour).padStart(2, '0')}:${m ?? '00'}` : null;
+    })
+    .filter((x): x is string => Boolean(x));
+  if (!workerId || !times.length || !/(leave|out|away|off|gone|unavailable|break|lunch)/.test(t)) return null;
+  const from = `${day}T${times[0]}`;
+  const to = `${day}T${times[1] ?? '17:00'}`;
+  return to > from ? { workerId, from, to } : null;
+}
+
+async function offlineCommand(instruction: string, ctx: ToolContext) {
+  const parsed = parseAvailability(instruction, planNow().slice(0, 10));
+  if (!parsed) {
+    logAction({ runId: ctx.runId, by: 'system', tool: 'command', args: { instruction }, ok: false, message: 'The offline agent only understands availability, e.g. "Maya leaves at 2pm". Add a Gemini key for anything else' });
+    return;
+  }
+  await executeTool('setAvailability', { ...parsed, note: instruction, reason: `You said: "${instruction}"` }, ctx);
+  await sleep(stepDelayMs());
+}
+
 let runCount = 0;
 
 /**
  * Run the agent over the given disputes (default: every open one). One run at a time;
  * a second call while one is in flight is ignored and returns false.
  */
-export async function runAgent(trigger: Trigger, focusIds?: string[]): Promise<boolean> {
+export async function runAgent(trigger: Trigger, focusIds?: string[], instruction?: string): Promise<boolean> {
   const s = store();
   if (s.running) return false;
   const runId = `run-${++runCount}`;
@@ -270,11 +313,12 @@ export async function runAgent(trigger: Trigger, focusIds?: string[]): Promise<b
       tool: 'runStart',
       args: { trigger },
       ok: true,
-      message: `Agent run started (${trigger === 'event' ? `new event: ${focus.join(', ')}` : `planning ${focus.length} disputes`}) with ${useGemini ? 'Gemini' : 'the offline rule-based agent'}`,
+      message: `Agent run started (${trigger === 'event' ? `new event: ${focus.join(', ')}` : trigger === 'command' ? `you said: "${instruction}"` : `planning ${focus.length} disputes`}) with ${useGemini ? 'Gemini' : 'the offline rule-based agent'}`,
     });
+    if (!useGemini && instruction) await offlineCommand(instruction, { runId, by: 'heuristic' });
     if (useGemini) {
       try {
-        await geminiRun(focus, { runId, by: 'gemini' });
+        await geminiRun(focus, { runId, by: 'gemini' }, instruction);
       } catch (e) {
         logAction({ runId, by: 'system', tool: 'geminiError', args: {}, ok: false, message: `Gemini failed, the rule-based agent takes over: ${(e as Error).message.slice(0, 160)}` });
       }
@@ -287,7 +331,8 @@ export async function runAgent(trigger: Trigger, focusIds?: string[]): Promise<b
     const pushedLate = () => store().disputes.filter((d) => d.status === 'open' && d.state === 'late' && !lateAtStart.has(d.id));
     if (pushedLate().length) await heuristicRun(pushedLate().map((d) => d.id), { runId, by: 'heuristic' });
     const broken = pushedLate();
-    if (broken.length) {
+    // A person's absence can make a deadline impossible; that is reported (flagged), never undone.
+    if (broken.length && trigger !== 'command') {
       store().disputes = checkpoint;
       await replan();
       logAction({

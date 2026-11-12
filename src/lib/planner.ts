@@ -93,7 +93,7 @@ interface EngineRun {
 }
 
 type SchedulingIssue = { getDescription(): string; getResolutions(): { getDescription(): string; resolve(): void }[] };
-type Dated = { startDate?: string; endDate?: string; constraintDate?: string; deadlineDate?: string };
+type Dated = { startDate?: string; endDate?: string; constraintDate?: string; deadlineDate?: string | null };
 
 /** Wall-clock strings to Date objects for the engine. */
 const withDates = <T extends Dated>(t: T) => ({
@@ -114,7 +114,7 @@ async function runEngine(disputes: Dispute[], workers: Worker[], planFrom: strin
   const project = new ProjectModel({
     startDate: toDate(data.startDate),
     calendar: WORK_CALENDAR.id,
-    calendars: [WORK_CALENDAR],
+    calendars: data.calendars.map((c) => ({ ...c, intervals: c.intervals.map(withDates) })),
     resources: data.resources,
     tasks: data.tasks.map((parent) => ({ ...withDates(parent), children: parent.children!.map(withDates) })),
     assignments: data.assignments,

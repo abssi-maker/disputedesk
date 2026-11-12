@@ -14,11 +14,12 @@ const WOW_LIMIT_MS = 15_000;
 const value = (page, id) => page.getByTestId(id).getAttribute('data-value').then(Number);
 const idle = (page, timeout) => page.waitForFunction(() => document.querySelector('main.desk')?.dataset.running === 'false', null, { timeout });
 const busy = (page) => page.waitForFunction(() => document.querySelector('main.desk')?.dataset.running === 'true', null, { timeout: 10_000 });
+// A dispute's row carries its state; red bars follow it.
 const someLateBars = (page) =>
-  page.waitForSelector('.b-sch-event-wrap .b-sch-event.dd-late', { timeout: 4_000 }).then(() => true, () => false);
-/** Bars repaint just after the counters, and Bryntum keeps removed bars as detached nodes; count only live ones. */
+  page.waitForSelector('[data-flight][data-state="late"]', { timeout: 4_000 }).then(() => true, () => false);
+/** Rows repaint just after the counters. */
 const noLateBars = (page) =>
-  page.waitForFunction(() => document.querySelectorAll('.b-sch-event-wrap .b-sch-event.dd-late').length === 0, null, { timeout: 4_000 }).then(() => true, () => false);
+  page.waitForFunction(() => document.querySelectorAll('[data-flight][data-state="late"]').length === 0, null, { timeout: 4_000 }).then(() => true, () => false);
 const shot = async (page, name) => {
   if (!shots) return;
   await page.waitForTimeout(900); // let bar and counter animations settle
@@ -37,7 +38,7 @@ async function run(browser, n) {
 
   const t0 = Date.now();
   await page.goto(`${base}/?demo=1`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.b-sch-event');
+  await page.waitForSelector('.b-gantt-task');
   const loadMs = Date.now() - t0;
   await idle(page, 10_000);
   const agent = await page.getByTestId('agent-badge').innerText();
@@ -71,19 +72,30 @@ async function run(browser, n) {
   await idle(page, 60_000);
   const protectedAfter = await value(page, 'protected');
   check(await noLateBars(page), 'the agent should leave no late bars');
-  check(await page.locator('.strip', { hasText: 'SIM-1' }).getAttribute('data-state') !== 'late', 'SIM-1 should not be late');
+  check((await page.locator('[data-flight="SIM-1"]').getAttribute('data-state')) !== 'late', 'SIM-1 should not be late');
   check(wowMs < WOW_LIMIT_MS, `wow moment took ${wowMs} ms (limit ${WOW_LIMIT_MS})`);
-  const tools = await page.locator('[data-testid="agent-log"] .log-row').evaluateAll((rows) => rows.map((r) => r.dataset.tool));
+  const tools = await page.locator('[data-testid="agent-log"] .entry').evaluateAll((rows) => rows.map((r) => r.dataset.tool));
   for (const tool of ['swapEvidenceSource', 'splitBlock', 'assignDispute']) check(tools.includes(tool), `agent log should contain ${tool}`);
   if (first) await shot(page, '04-green-board-agent-landed-it.png');
   if (first && shots) await page.getByTestId('agent-log').screenshot({ path: path.join(shots, '05-agent-log.png') });
 
   // 4. Side panel with the held evidence and the Approve & send gate.
-  await page.locator('.strip', { hasText: 'SIM-1' }).click();
+  await page.locator('[data-flight="SIM-1"]').click();
   await page.getByTestId('dispute-panel').waitFor();
   check(await page.getByTestId('approve').isVisible(), 'Approve & send should be offered for the held evidence');
   if (first) await shot(page, '06-side-panel-approve-and-send.png');
   if (first && shots) await page.getByTestId('dispute-panel').screenshot({ path: path.join(shots, '07-side-panel.png') });
+
+  // 5. Tell the agent: a person's absence goes into the scheduling engine.
+  await page.getByTestId('dispute-panel').getByRole('button', { name: 'Back to the agent log' }).click();
+  await page.getByTestId('tell').fill('Maya is away 13:00 to 15:00');
+  await page.keyboard.press('Enter');
+  await busy(page);
+  await idle(page, 90_000);
+  const tools2 = await page.locator('[data-testid="agent-log"] .entry').evaluateAll((rows) => rows.map((r) => r.dataset.tool));
+  check(tools2.includes('setAvailability'), 'the agent should record the absence');
+  check(await page.locator('.dd-away').first().isVisible(), 'the absence should show on the board');
+  if (first) await shot(page, '08-told-the-agent-maya-is-away.png');
 
   check(errors.length === 0, `page errors: ${errors.join(' | ')}`);
   await page.close();

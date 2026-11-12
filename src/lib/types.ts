@@ -9,6 +9,8 @@ export interface Worker {
   name: string;
   role: string;
   kind: 'human' | 'agent';
+  /** Time this person is not available; becomes a calendar in the scheduling engine. */
+  away?: { from: WallTime; to: WallTime; note?: string }[];
 }
 
 export type EvidenceSource = 'signature' | 'delivery_photo' | 'tracking' | 'chat_log' | 'listing_photos';

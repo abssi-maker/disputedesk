@@ -4,7 +4,7 @@
 import { assembleParts, collapseToResolve, setEvidenceSource, splitAssemble } from './chain';
 import * as paypal from './paypal-disputes';
 import { lateBy, planDisputes } from './planner';
-import { findDispute, logAction, planNow, replan, store } from './store';
+import { findDispute, logAction, planNow, replan, setAway, store } from './store';
 import { MIN, formatDuration, ms, wall } from './time';
 import {
   EVIDENCE_SOURCES,
@@ -145,7 +145,26 @@ export function heldBecause(d: Dispute, kind: PayPalWriteKind): string | null {
 
 const HUMAN_WORKERS = () => store().workers.filter((w) => w.kind === 'human').map((w) => w.id);
 
+/** A person is away for a while: give them a calendar with that gap and let the engine re-plan. */
+async function setAvailability(args: Args, ctx: ToolContext): Promise<ToolResult> {
+  const worker = store().workers.find((w) => w.id === args.workerId && w.kind === 'human');
+  const from = String(args.from ?? '').slice(0, 16);
+  const to = String(args.to ?? '').slice(0, 16);
+  const fail = (message: string) => record(ctx, 'setAvailability', args, undefined, false, message);
+  if (!worker) return fail(`workerId must be one of ${HUMAN_WORKERS().join(', ')}`);
+  if (Number.isNaN(ms(from)) || Number.isNaN(ms(to)) || ms(to) <= ms(from)) return fail('from and to must be times like 2026-01-31T14:00, with to after from');
+  const lateBefore = new Set(store().counters.unplaced);
+  setAway(worker.id, [...(worker.away ?? []), { from, to, note: typeof args.note === 'string' ? args.note : undefined }]);
+  await replan();
+  const nowLate = store().disputes.filter((d) => d.status === 'open' && d.state === 'late' && !lateBefore.has(d.id));
+  const effect = nowLate.length
+    ? `This pushes ${nowLate.map((d) => `${d.id} ${formatDuration(lateBy(d))}`).join(', ')} past the deadline. Engine conflict: ${nowLate[0].conflict}`
+    : 'Every dispute still lands in time';
+  return record(ctx, 'setAvailability', args, undefined, true, `${worker.name} is away ${clock(from)}–${clock(to)}${from.slice(0, 10) !== to.slice(0, 10) ? ` (to ${to.slice(0, 10)})` : ''}. ${effect}`);
+}
+
 export async function executeTool(name: string, args: Args, ctx: ToolContext): Promise<ToolResult> {
+  if (name === 'setAvailability') return setAvailability(args, ctx);
   const id = String(args.disputeId ?? '');
   const d = findDispute(id);
   const fail = (message: string) => record(ctx, name, args, d, false, message);

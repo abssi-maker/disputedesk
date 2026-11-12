@@ -44,7 +44,7 @@ function create(demo: boolean): Store {
   const realNow = Math.floor(instantToWallMs(new Date(), timeZone()) / MIN) * MIN;
   const s: Store = {
     merchantId: MERCHANT_ID,
-    workers: WORKERS,
+    workers: structuredClone(WORKERS),
     disputes: [],
     counters: { atRiskUsd: 0, protectedUsd: 0, resolvedUsd: 0, unplaced: [] },
     actions: [],
@@ -135,6 +135,12 @@ export function captureBaseline() {
 export function setRunning(running: boolean) {
   store().running = running;
   publish();
+}
+
+/** Record when a person is away; the engine then plans around it. */
+export function setAway(workerId: string, away: Worker['away']) {
+  const w = store().workers.find((x) => x.id === workerId);
+  if (w) w.away = away;
 }
 
 export function setPolicy(policy: Partial<Policy>) {
