@@ -1,35 +1,37 @@
-// The deterministic layer under the AI. Dates are computed by the Bryntum Scheduler Pro engine
-// (the same ProjectModel the board uses), running headless on the server:
+// The deterministic layer under the AI. Dates are computed by the Bryntum Gantt engine (the same
+// ProjectModel the board uses), running headless on the server:
 //   - a 09:00-17:00 working calendar,
-//   - finish-to-start dependencies along each dispute's evidence chain,
+//   - finish-to-start dependencies along each dispute's evidence chain, with waiting time as lag,
 //   - the PayPal response deadline as a "finish no later than" constraint.
 // A chain that cannot meet its deadline comes back as an engine scheduling conflict; that message
 // is what the agent is shown when one of its moves is rejected.
 //
-// The engine does not level resources, so one rule lives here: on each lane, work is queued in
-// priority order (amount x win probability x deadline pressure), expressed to the engine as
-// lane dependencies. The engine does the rest.
+// The engine does not level resources, so one rule lives here: who goes first on each worker's
+// lane. Disputes are taken in priority order (amount x win probability x deadline pressure) and
+// each step takes the earliest free gap on its lane, which lets other work fill a wait on the
+// carrier. That queue is handed to the engine as lane dependencies; the engine sets every date.
 import { toDate, toWall } from './format';
+import { WORK_CALENDAR, buildProjectData, taskName } from './project';
 import { ms, wall, workingMinutesBetween } from './time';
-import type { ChainTask, Counters, Dispute } from './types';
+import type { ChainTask, Counters, Dispute, Worker } from './types';
 
 /** Below this much working slack before the deadline a plan counts as tight. */
 export const TIGHT_SLACK_MIN = 45;
 
-type Bryntum = typeof import('@bryntum/schedulerpro');
+type Bryntum = typeof import('@bryntum/gantt');
 let engine: Promise<Bryntum> | undefined;
 
 /**
- * Load the Scheduler Pro module. Its browser bundle touches DOM globals while loading, so a DOM
+ * Load the Bryntum Gantt module. Its browser bundle touches DOM globals while loading, so a DOM
  * shim is registered for that moment only and removed again; the engine itself needs none.
  */
 export function loadEngine(): Promise<Bryntum> {
   return (engine ??= (async () => {
-    if (typeof window !== 'undefined') return import('@bryntum/schedulerpro');
+    if (typeof window !== 'undefined') return import('@bryntum/gantt');
     const { GlobalRegistrator } = await import('@happy-dom/global-registrator');
     GlobalRegistrator.register({ url: 'http://localhost/' });
     try {
-      return await import('@bryntum/schedulerpro');
+      return await import('@bryntum/gantt');
     } finally {
       await GlobalRegistrator.unregister();
     }
@@ -43,18 +45,44 @@ export function priority(d: Dispute, now: number): number {
   return d.amount * (d.winProbability ?? 0.5) * pressure;
 }
 
-const CALENDAR = {
-  id: 'working-hours',
-  name: 'Working hours',
-  unspecifiedTimeIsWorking: false,
-  intervals: [{ recurrentStartDate: 'at 9:00', recurrentEndDate: 'at 17:00', isWorking: true }],
-};
+/**
+ * Decide each worker's queue. Works on a "working minutes from now" axis: every step is placed in
+ * the earliest free gap on its lane after its predecessors (plus any wait) are done. Only the
+ * resulting order is kept (laneSeq); the engine computes the real dates.
+ */
+function queueLanes(open: Dispute[], now: number) {
+  const lanes = new Map<string, [number, number][]>();
+  const startOf = new Map<string, number>();
+  const doneAt = new Map<string, number>();
+  const place = (t: ChainTask, ready: number) => {
+    let at = ready;
+    const lane = lanes.get(t.workerId) ?? [];
+    for (let clash; (clash = lane.find(([s, e]) => s < at + t.durationMin && e > at)); ) at = clash[1];
+    lane.push([at, at + t.durationMin]);
+    lanes.set(t.workerId, lane);
+    startOf.set(t.id, at);
+  };
+  const pinOf = (t: ChainTask) => (t.pinnedStart ? Math.max(0, workingMinutesBetween(now, ms(t.pinnedStart))) : 0);
 
-interface Queued {
-  task: ChainTask;
-  dispute: Dispute;
-  /** Position in the lane queue; lower runs first. */
-  key: number;
+  // A block a human pinned claims its slot before the agent's priorities are applied.
+  for (const d of open) for (const t of d.chain) if (t.pinnedBy === 'human') place(t, pinOf(t));
+
+  // Starting a wait early costs minutes and saves hours: requests that others must answer go first.
+  for (const d of open) for (const t of d.chain) if (!startOf.has(t.id) && !t.dependsOn.length && t.waitAfterMin) place(t, pinOf(t));
+
+  for (const d of open) {
+    for (const t of d.chain) {
+      if (!startOf.has(t.id)) place(t, Math.max(pinOf(t), ...t.dependsOn.map((id) => doneAt.get(id)!)));
+      doneAt.set(t.id, startOf.get(t.id)! + t.durationMin + (t.waitAfterMin ?? 0));
+    }
+  }
+
+  // Queue order = simulated start, never ahead of a step it depends on.
+  const key = new Map<string, number>();
+  const all = open.flatMap((d) => d.chain);
+  for (const t of all) key.set(t.id, Math.max(startOf.get(t.id)!, ...t.dependsOn.map((id) => key.get(id)! + 0.001)));
+  const rank = new Map(all.map((t, i) => [t.id, i]));
+  [...all].sort((a, b) => key.get(a.id)! - key.get(b.id)! || rank.get(a.id)! - rank.get(b.id)!).forEach((t, i) => (t.laneSeq = i));
 }
 
 interface EngineRun {
@@ -64,54 +92,40 @@ interface EngineRun {
   conflicts: Map<string, string>;
 }
 
-const engineName = (d: Dispute, t: ChainTask) => `${d.id} ${t.name}`;
+type SchedulingIssue = { getDescription(): string; getResolutions(): { getDescription(): string; resolve(): void }[] };
+type Dated = { startDate?: string; endDate?: string; constraintDate?: string; deadlineDate?: string };
 
-/** One engine calculation: build a project from the queue, let Scheduler Pro schedule it, read it back. */
-async function runEngine(queue: Queued[], nowWall: string): Promise<EngineRun> {
+/** Wall-clock strings to Date objects for the engine. */
+const withDates = <T extends Dated>(t: T) => ({
+  ...t,
+  ...(t.startDate ? { startDate: toDate(t.startDate) } : {}),
+  ...(t.endDate ? { endDate: toDate(t.endDate) } : {}),
+  ...(t.constraintDate ? { constraintDate: toDate(t.constraintDate) } : {}),
+  ...(t.deadlineDate ? { deadlineDate: toDate(t.deadlineDate) } : {}),
+});
+
+/** One engine calculation: build the project, let Bryntum schedule it, read the dates back. */
+async function runEngine(disputes: Dispute[], workers: Worker[], planFrom: string): Promise<EngineRun> {
   // EffectResolutionResult is exported by the module but missing from its type definitions.
   const { ProjectModel, EffectResolutionResult } = (await loadEngine()) as Bryntum & { EffectResolutionResult: { Resume: unknown } };
-  const now = toDate(nowWall);
-  const lastOfChain = (q: Queued) => !q.dispute.chain.some((other) => other.dependsOn.includes(q.task.id));
-  const byName = new Map(queue.map((q) => [engineName(q.dispute, q.task), q.dispute.id]));
-
-  const lanes = new Map<string, Queued[]>();
-  for (const q of [...queue].sort((a, b) => a.key - b.key)) {
-    lanes.set(q.task.workerId, [...(lanes.get(q.task.workerId) ?? []), q]);
-  }
+  const data = buildProjectData(disputes, workers, planFrom, true);
+  const byName = new Map(disputes.flatMap((d) => d.chain.map((t) => [taskName(d, t), d.id] as const)));
 
   const project = new ProjectModel({
-    calendar: CALENDAR.id,
-    calendars: [CALENDAR],
-    resources: [...lanes.keys()].map((id) => ({ id })),
-    events: queue.map((q) => ({
-      id: q.task.id,
-      name: engineName(q.dispute, q.task),
-      startDate: now,
-      duration: q.task.durationMin,
-      durationUnit: 'minute',
-      // A pinned block may not start before its pin; the last step may not finish after the deadline.
-      ...(q.task.pinnedStart
-        ? { constraintType: 'startnoearlierthan' as const, constraintDate: toDate(q.task.pinnedStart) }
-        : lastOfChain(q)
-          ? { constraintType: 'finishnolaterthan' as const, constraintDate: toDate(q.dispute.deadline) }
-          : {}),
-    })),
-    assignments: queue.map((q) => ({ id: `as:${q.task.id}`, event: q.task.id, resource: q.task.workerId })),
-    dependencies: [
-      ...queue.flatMap((q) => q.task.dependsOn.map((from) => ({ id: `${from}>${q.task.id}`, from, to: q.task.id }))),
-      ...[...lanes.values()].flatMap((lane) =>
-        lane.slice(1).flatMap((q, i) =>
-          q.task.dependsOn.includes(lane[i].task.id) ? [] : [{ id: `lane:${lane[i].task.id}>${q.task.id}`, from: lane[i].task.id, to: q.task.id }],
-        ),
-      ),
-    ],
+    startDate: toDate(data.startDate),
+    calendar: WORK_CALENDAR.id,
+    calendars: [WORK_CALENDAR],
+    resources: data.resources,
+    tasks: data.tasks.map((parent) => ({ ...withDates(parent), children: parent.children!.map(withDates) })),
+    assignments: data.assignments,
+    dependencies: data.dependencies,
   });
 
   const conflicts = new Map<string, string>();
-  project.on('schedulingConflict', ({ schedulingIssue, continueWithResolutionResult }: { schedulingIssue: { getDescription(): string; getResolutions(): { getDescription(): string; resolve(): void }[] }; continueWithResolutionResult(result: unknown): void }) => {
+  project.on('schedulingConflict', ({ schedulingIssue, continueWithResolutionResult }: { schedulingIssue: SchedulingIssue; continueWithResolutionResult(result: unknown): void }) => {
     const description = schedulingIssue.getDescription();
-    const taskName = /Task "([^"]+)" Finish-No-Later-Than/.exec(description)?.[1];
-    const disputeId = taskName && byName.get(taskName);
+    const name = /Task "([^"]+)" Finish-No-Later-Than/.exec(description)?.[1];
+    const disputeId = name && byName.get(name);
     if (disputeId) conflicts.set(disputeId, description.replace('A scheduling conflict has been found: ', ''));
     // Keep scheduling without the deadline so the board can show how late the chain lands.
     const dropConstraint = schedulingIssue.getResolutions().find((r) => /constraint/i.test(r.getDescription()));
@@ -122,9 +136,11 @@ async function runEngine(queue: Queued[], nowWall: string): Promise<EngineRun> {
   try {
     await project.commitAsync();
     const dates = new Map<string, [string, string]>();
-    for (const q of queue) {
-      const record = project.eventStore.getById(q.task.id) as unknown as { startDate: Date; endDate: Date };
-      dates.set(q.task.id, [toWall(record.startDate), toWall(record.endDate)]);
+    for (const d of disputes) {
+      for (const t of d.chain) {
+        const record = project.taskStore.getById(t.id) as unknown as { startDate: Date; endDate: Date };
+        dates.set(t.id, [toWall(record.startDate), toWall(record.endDate)]);
+      }
     }
     return { dates, conflicts };
   } finally {
@@ -138,39 +154,27 @@ export interface PlanResult {
 }
 
 /**
- * Schedule every open dispute's chain with the Scheduler Pro engine. A chain that cannot end
- * before its deadline is still placed (so the board can show how late it is), reported as
- * unplaced, and carries the engine's conflict message.
+ * Schedule every open dispute's chain with the Bryntum engine. A chain that cannot end before its
+ * deadline is still placed (so the board can show how late it is), reported as unplaced, and
+ * carries the engine's conflict message.
  */
-export async function planDisputes(input: Dispute[], nowWall: string): Promise<PlanResult> {
-  const now = ms(nowWall);
+export async function planDisputes(input: Dispute[], workers: Worker[], planFrom: string): Promise<PlanResult> {
+  const now = ms(planFrom);
   const disputes = structuredClone(input);
   for (const d of disputes) if (d.status === 'resolved') d.state = 'resolved';
 
   const open = disputes
     .filter((d) => d.status === 'open')
     .sort((a, b) => priority(b, now) - priority(a, now) || a.id.localeCompare(b.id));
-  const queue: Queued[] = open.flatMap((dispute, i) => dispute.chain.map((task, j) => ({ task, dispute, key: i * 1000 + j })));
-  if (!queue.length) return { disputes, counters: computeCounters(disputes) };
+  if (!open.length) return { disputes, counters: computeCounters(disputes) };
 
-  let run = await runEngine(queue, nowWall);
-
-  // Pinned blocks (human drags, agent moves) take their place in the lane queue by time, not priority.
-  if (queue.some((q) => q.task.pinnedStart)) {
-    const keys = new Map<string, number>();
-    for (const q of queue) {
-      const own = q.task.pinnedStart ? Math.max(now, ms(q.task.pinnedStart)) - 0.5 : ms(run.dates.get(q.task.id)![0]);
-      keys.set(q.task.id, Math.max(own, ...q.task.dependsOn.map((id) => keys.get(id)! + 1)));
-    }
-    const ordered = [...queue].sort((a, b) => keys.get(a.task.id)! - keys.get(b.task.id)! || a.key - b.key);
-    ordered.forEach((q, i) => (q.key = i));
-    run = await runEngine(queue, nowWall);
-  }
+  queueLanes(open, now);
+  const run = await runEngine(disputes, workers, planFrom);
 
   for (const d of open) {
     for (const t of d.chain) [t.start, t.end] = run.dates.get(t.id)!;
-    const start = Math.min(...d.chain.map((t) => ms(t.start!)));
-    const end = Math.max(...d.chain.map((t) => ms(t.end!)));
+    const start = Math.min(...d.chain.map((t: ChainTask) => ms(t.start!)));
+    const end = Math.max(...d.chain.map((t: ChainTask) => ms(t.end!)));
     const deadline = ms(d.deadline);
     d.slot = { start: wall(start), end: wall(end) };
     if (end > deadline) {

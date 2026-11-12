@@ -13,8 +13,8 @@
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
-    "@bryntum/schedulerpro": "npm:@bryntum/schedulerpro-trial@^7.3.8",
-    "@bryntum/schedulerpro-react": "^7.3.8",
+    "@bryntum/gantt": "npm:@bryntum/gantt-trial@^7.3.8",
+    "@bryntum/gantt-react": "^7.3.8",
     "@google/genai": "^3.2.0",
     "@happy-dom/global-registrator": "^21.0.4",
     "@paypal/paypal-server-sdk": "^2.5.0",

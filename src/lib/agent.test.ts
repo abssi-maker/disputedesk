@@ -36,14 +36,16 @@ async function addSimulated() {
 
 describe('the wow path with the offline agent', () => {
   it('turns a late simulated dispute green by swapping proof, splitting and assigning half to Maya', async () => {
+    await runAgent('plan'); // the demo plans the board first, then the event arrives
     const id = await addSimulated();
     expect(findDispute(id)!.state).toBe('late');
-    expect(store().counters.atRiskUsd).toBeGreaterThanOrEqual(640);
+    expect(store().counters.atRiskUsd).toBe(640);
 
     await runAgent('event', [id]);
 
     const d = findDispute(id)!;
     expect(d.state).toBe('safe');
+    expect(store().counters.atRiskUsd).toBe(0);
     expect(d.evidenceSource).toBe('delivery_photo');
     expect(d.chain.filter((t) => t.kind === 'assemble').map((t) => t.workerId)).toEqual(['owner', 'maya']);
     expect(tools()).toEqual(expect.arrayContaining(['swapEvidenceSource', 'splitBlock', 'assignDispute']));
@@ -158,5 +160,15 @@ describe('webhook path', () => {
     await vi.waitFor(() => expect(tools()).toContain('runEnd'));
     const again = await handleDisputeEvent({ ...event, event_type: 'CUSTOMER.DISPUTE.UPDATED' }, true);
     expect(again.agentTriggered).toBe(false);
+  });
+});
+
+describe('run-level guarantee', () => {
+  it('never ends a run with a previously on-time dispute pushed late', async () => {
+    await runAgent('plan');
+    await addSimulated();
+    const onTime = store().disputes.filter((d) => d.status === 'open' && d.state !== 'late').map((d) => d.id);
+    await runAgent('event', ['SIM-1']);
+    for (const id of onTime) expect(findDispute(id)!.state).not.toBe('late');
   });
 });

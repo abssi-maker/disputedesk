@@ -25,6 +25,8 @@ interface Store {
   simulatedCount: number;
   actionCount: number;
   listeners: Set<(snapshot: Snapshot) => void>;
+  /** Task dates before the current or last agent run, drawn as the baseline on the board. */
+  baseline: Record<string, [string, string]>;
   boot?: Promise<void>;
 }
 
@@ -54,6 +56,7 @@ function create(demo: boolean): Store {
     simulatedCount: 0,
     actionCount: 0,
     listeners: g.__disputeDeskStore?.listeners ?? new Set(),
+    baseline: {},
   };
   s.disputes = seedDisputes(planFrom(s));
   return s;
@@ -64,7 +67,7 @@ const nowOf = (s: Store) => s.frozenNow ?? Math.floor(instantToWallMs(new Date()
 const planFrom = (s: Store) => Math.ceil(nowOf(s) / (PLAN_GRID_MIN * MIN)) * PLAN_GRID_MIN * MIN;
 
 async function replanStore(s: Store) {
-  const result = await planDisputes(s.disputes, wall(planFrom(s)));
+  const result = await planDisputes(s.disputes, s.workers, wall(planFrom(s)));
   s.disputes = result.disputes;
   s.counters = result.counters;
 }
@@ -80,6 +83,8 @@ export function snapshot(): Snapshot {
   return {
     version: s.version,
     now: wall(nowOf(s)),
+    planFrom: wall(planFrom(s)),
+    baseline: s.baseline,
     demo: s.demo,
     agentMode: process.env.GEMINI_API_KEY ? 'gemini' : 'offline',
     agentModel: process.env.GEMINI_API_KEY ? process.env.GEMINI_MODEL || 'gemini-3.8-flash' : undefined,
@@ -119,6 +124,12 @@ export function logAction(action: Omit<AgentAction, 'id' | 'at' | 'merchantId'>)
   if (s.actions.length > MAX_ACTIONS) s.actions.splice(0, s.actions.length - MAX_ACTIONS);
   publish();
   return full;
+}
+
+/** Remember where every block is now, so the board can show what the agent changes. */
+export function captureBaseline() {
+  const s = store();
+  s.baseline = Object.fromEntries(s.disputes.flatMap((d) => d.chain.filter((t) => t.start && t.end).map((t) => [t.id, [t.start!, t.end!]])));
 }
 
 export function setRunning(running: boolean) {

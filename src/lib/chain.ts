@@ -8,8 +8,12 @@ const MIN_PART_MIN = 15;
 
 const proofFields = (source: EvidenceSource | null) =>
   source
-    ? { name: `Proof: ${EVIDENCE_SOURCES[source].label}`, durationMin: EVIDENCE_SOURCES[source].minutes }
-    : { name: 'Look for evidence', durationMin: 60 };
+    ? {
+        name: `Proof: ${EVIDENCE_SOURCES[source].label}`,
+        durationMin: EVIDENCE_SOURCES[source].workMin,
+        waitAfterMin: EVIDENCE_SOURCES[source].waitMin,
+      }
+    : { name: 'Look for evidence', durationMin: 60, waitAfterMin: 0 };
 
 export function buildChain(
   d: Pick<Dispute, 'id' | 'merchantId' | 'assignedTo' | 'evidenceSource'>,

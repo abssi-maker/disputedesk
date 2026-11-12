@@ -8,6 +8,7 @@ import { findDispute, logAction, planNow, replan, store } from './store';
 import { MIN, formatDuration, ms, wall } from './time';
 import {
   EVIDENCE_SOURCES,
+  evidenceMinutes,
   type Actor,
   type Decision,
   type Dispute,
@@ -45,29 +46,37 @@ function planStatus(d: Dispute): string {
 }
 
 /**
- * Apply a change on a copy, re-plan, and commit only if no chain is made late by it.
- * Returns an error string when the planner rejects the change.
+ * Apply a change on a copy, let the engine re-schedule, and commit only if the engine result is
+ * acceptable:
+ *   - the dispute being changed must not land later than before;
+ *   - another dispute may be pushed past its deadline only if this move improves its own dispute
+ *     (the agent is then told to repair the other one; runAgent rolls the run back if it does not).
+ * Returns { error } when rejected, or { warning } describing any dispute pushed late.
  */
-async function tryChange(disputeId: string, mutate: (d: Dispute) => string | null | void): Promise<string | null> {
+async function tryChange(disputeId: string, mutate: (d: Dispute) => string | null | void): Promise<{ error?: string; warning?: string }> {
   const s = store();
   const trial = structuredClone(s.disputes);
-  const target = trial.find((d) => d.id === disputeId)!;
-  const error = mutate(target);
-  if (error) return error;
-  const planned = await planDisputes(trial, planNow());
-  for (const after of planned.disputes) {
-    if (after.status !== 'open' || after.state !== 'late') continue;
-    const before = s.disputes.find((d) => d.id === after.id)!;
-    if (before.state !== 'late') {
-      return `rejected by the scheduling engine: ${after.id} would land ${formatDuration(lateBy(after))} past its deadline. Engine conflict: ${after.conflict}`;
-    }
-    if (after.id === disputeId && lateBy(after) > lateBy(before)) {
-      return `rejected by the scheduling engine: ${after.id} would land even later (${formatDuration(lateBy(after))} past its deadline). Engine conflict: ${after.conflict}`;
-    }
+  const error = mutate(trial.find((d) => d.id === disputeId)!);
+  if (error) return { error };
+  const planned = await planDisputes(trial, s.workers, planNow());
+  const before = (id: string) => s.disputes.find((d) => d.id === id)!;
+  const target = planned.disputes.find((d) => d.id === disputeId)!;
+  const engine = (d: Dispute) => `Engine conflict: ${d.conflict}`;
+
+  if (lateBy(target) > lateBy(before(disputeId))) {
+    return { error: `rejected by the scheduling engine: ${disputeId} would land ${formatDuration(lateBy(target))} past its deadline. ${engine(target)}` };
+  }
+  const pushed = planned.disputes.filter((d) => d.status === 'open' && d.state === 'late' && d.id !== disputeId && before(d.id).state !== 'late');
+  const improved = lateBy(target) < lateBy(before(disputeId));
+  if (pushed.length && !improved) {
+    const p = pushed[0];
+    return { error: `rejected by the scheduling engine: ${p.id} would land ${formatDuration(lateBy(p))} past its deadline. ${engine(p)}` };
   }
   s.disputes = planned.disputes;
   s.counters = planned.counters;
-  return null;
+  return pushed.length
+    ? { warning: `Warning: this pushes ${pushed.map((p) => `${p.id} ${formatDuration(lateBy(p))} past its deadline`).join(' and ')}; repair that before you finish` }
+    : {};
 }
 
 function record(ctx: ToolContext, tool: string, args: Args, d: Dispute | undefined, ok: boolean, message: string, paypalRecord?: PayPalWriteRecord): ToolResult {
@@ -142,7 +151,8 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
   const fail = (message: string) => record(ctx, name, args, d, false, message);
   if (!d) return fail(`unknown dispute "${id}"`);
   if (d.status === 'resolved') return fail(`${id} is already resolved`);
-  const done = (message: string) => record(ctx, name, args, findDispute(id), true, `${message}. ${id}: ${planStatus(findDispute(id)!)}`);
+  const done = (message: string, warning?: string) =>
+    record(ctx, name, args, findDispute(id), true, `${message}. ${id}: ${planStatus(findDispute(id)!)}${warning ? `. ${warning}` : ''}`);
 
   switch (name) {
     case 'setDecision': {
@@ -162,7 +172,7 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
       const workerId = String(args.workerId);
       if (!HUMAN_WORKERS().includes(workerId)) return fail(`workerId must be one of ${HUMAN_WORKERS().join(', ')}`);
       const part = args.part == null ? null : Number(args.part);
-      const error = await tryChange(id, (t) => {
+      const { error, warning } = await tryChange(id, (t) => {
         if (part == null) {
           t.assignedTo = workerId;
           for (const task of t.chain) task.workerId = workerId;
@@ -176,27 +186,27 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
       });
       if (error) return fail(error);
       const name_ = store().workers.find((w) => w.id === workerId)!.name;
-      return done(part == null ? `Assigned ${id} to ${name_}` : `Assigned part ${part} of ${id} to ${name_}`);
+      return done(part == null ? `Assigned ${id} to ${name_}` : `Assigned part ${part} of ${id} to ${name_}`, warning);
     }
 
     case 'moveBlock': {
       const start = String(args.start ?? '').slice(0, 16);
       if (Number.isNaN(ms(start))) return fail('start must look like 2026-01-31T09:30');
       if (ms(start) < ms(planNow())) return fail(`start is in the past; now is ${planNow()}`);
-      const error = await tryChange(id, (t) => {
+      const { error, warning } = await tryChange(id, (t) => {
         t.chain[0].pinnedStart = start;
         t.chain[0].pinnedBy = 'agent';
       });
       if (error) return fail(error);
-      return done(`Moved ${id} to start at ${clock(start)}`);
+      return done(`Moved ${id} to start at ${clock(start)}`, warning);
     }
 
     case 'splitBlock': {
       const parts = Number(args.parts);
       if (!Number.isInteger(parts) || parts < 2 || parts > 3) return fail('parts must be 2 or 3');
-      const error = await tryChange(id, (t) => splitAssemble(t, parts));
+      const { error, warning } = await tryChange(id, (t) => splitAssemble(t, parts));
       if (error) return fail(error);
-      return done(`Split the evidence block of ${id} into ${parts} parts`);
+      return done(`Split the evidence block of ${id} into ${parts} parts`, warning);
     }
 
     case 'swapEvidenceSource': {
@@ -206,12 +216,13 @@ export async function executeTool(name: string, args: Args, ctx: ToolContext): P
         return fail(`"${to}" is not available for ${id}; available: ${d.evidenceAvailable.join(', ') || 'none'}`);
       }
       const from = d.evidenceSource;
-      const error = await tryChange(id, (t) => setEvidenceSource(t, to));
+      const { error, warning } = await tryChange(id, (t) => setEvidenceSource(t, to));
       if (error) return fail(error);
-      const saved = from ? EVIDENCE_SOURCES[from].minutes - EVIDENCE_SOURCES[to].minutes : 0;
+      const saved = from ? evidenceMinutes(from) - evidenceMinutes(to) : 0;
       return done(
         `Switched proof for ${id} from ${from ? EVIDENCE_SOURCES[from].label : 'none'} to ${EVIDENCE_SOURCES[to].label}` +
           (saved > 0 ? ` (${formatDuration(saved)} shorter)` : ''),
+        warning,
       );
     }
 

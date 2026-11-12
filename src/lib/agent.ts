@@ -5,8 +5,8 @@ import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel, type Content, ty
 import { executeTool, heldBecause, type ToolContext } from './actions';
 import { assembleParts } from './chain';
 import { lateBy, priority } from './planner';
-import { findDispute, logAction, nowMs, planNow, setRunning, store } from './store';
-import { EVIDENCE_SOURCES, type Dispute, type EvidenceSource } from './types';
+import { captureBaseline, findDispute, logAction, nowMs, planNow, replan, setRunning, store } from './store';
+import { EVIDENCE_SOURCES, evidenceMinutes, type Dispute, type EvidenceSource } from './types';
 
 export type Trigger = 'plan' | 'event';
 
@@ -59,6 +59,7 @@ const TOOLS: FunctionDeclaration[] = [
 const SYSTEM = `You are the dispute agent for one small PayPal seller. You drive a schedule board: three lanes
 (owner "You", assistant "Maya", and your own Auto-resolver lane). Each dispute has a chain
 proof -> assemble evidence -> submit that must END before the PayPal response deadline. Working hours are 09:00-17:00.
+A proof source has workMin (hands-on time) and waitMin (waiting on the carrier; the person is free meanwhile).
 
 You act only through tool calls. A deterministic planner places the blocks and rejects any move that would
 make a chain miss its deadline; when a call is rejected, read the error and try something else.
@@ -96,8 +97,8 @@ function describe(d: Dispute) {
     deadline: d.deadline,
     plan: d.state === 'late' ? `LATE by ${lateBy(d)} min` : `${d.state}, ${d.slackMin} min slack`,
     conflict: d.conflict,
-    evidenceSource: d.evidenceSource && { name: d.evidenceSource, minutes: EVIDENCE_SOURCES[d.evidenceSource].minutes },
-    evidenceAvailable: d.evidenceAvailable.map((s) => ({ name: s, minutes: EVIDENCE_SOURCES[s].minutes })),
+    evidenceSource: d.evidenceSource && { name: d.evidenceSource, ...EVIDENCE_SOURCES[d.evidenceSource] },
+    evidenceAvailable: d.evidenceAvailable.map((s) => ({ name: s, ...EVIDENCE_SOURCES[s] })),
     decision: d.decision,
     pendingApproval: d.pendingAction?.kind,
     paypal: d.paypal && { stage: d.paypal.stage, status: d.paypal.status, allowedActions: d.paypal.allowedActions },
@@ -117,7 +118,7 @@ function workload(): Record<string, number> {
 
 const openFocus = (ids: string[]) => ids.map((id) => findDispute(id)).filter((d): d is Dispute => d?.status === 'open');
 /** Work is left when a focus dispute has no decision, or is late and not yet handed to the human. */
-const needsWork = (d: Dispute) => !d.decision || (d.state === 'late' && !d.flaggedForHuman);
+const needsWork = (d: Dispute) => !d.decision || (d.state !== 'safe' && !d.flaggedForHuman);
 
 function stateMessage(focus: string[]): string {
   const s = store();
@@ -196,7 +197,8 @@ async function heuristicFix(id: string, ctx: ToolContext) {
     return result;
   };
   const current = () => findDispute(id)!;
-  const stillLate = () => current().status === 'open' && current().state === 'late';
+  // A tight landing is treated like a late one: keep going until there is real slack.
+  const stillLate = () => current().status === 'open' && current().state !== 'safe';
 
   if (!current().decision) {
     const { decision, winProbability, rationale, draft } = heuristicDecision(current());
@@ -215,8 +217,8 @@ async function heuristicFix(id: string, ctx: ToolContext) {
   }
 
   if (stillLate() && d.evidenceSource) {
-    const fastest = [...d.evidenceAvailable].sort((a, b) => EVIDENCE_SOURCES[a].minutes - EVIDENCE_SOURCES[b].minutes)[0] as EvidenceSource | undefined;
-    if (fastest && EVIDENCE_SOURCES[fastest].minutes < EVIDENCE_SOURCES[d.evidenceSource].minutes) {
+    const fastest = [...d.evidenceAvailable].sort((a, b) => evidenceMinutes(a) - evidenceMinutes(b))[0] as EvidenceSource | undefined;
+    if (fastest && evidenceMinutes(fastest) < evidenceMinutes(d.evidenceSource)) {
       await step('swapEvidenceSource', { from: d.evidenceSource, to: fastest, reason: `${EVIDENCE_SOURCES[fastest].label} is already available and faster to obtain` });
     }
   }
@@ -231,7 +233,7 @@ async function heuristicFix(id: string, ctx: ToolContext) {
     if (lighter !== current().assignedTo) await step('assignDispute', { workerId: lighter, reason: 'That lane has less work queued' });
   }
   if (stillLate() && !current().flaggedForHuman) {
-    await step('flagForHuman', { reason: `Cannot land before the deadline: ${lateBy(current())} minutes short with every option used` });
+    if (current().state === 'late') await step('flagForHuman', { reason: `Cannot land before the deadline: ${lateBy(current())} minutes short with every option used` });
   }
   if (current().status === 'open' && !current().pendingAction && current().draft) {
     await step('provideEvidence', { note: current().draft, reason: 'Evidence statement is drafted and waits for your review' });
@@ -255,6 +257,10 @@ export async function runAgent(trigger: Trigger, focusIds?: string[]): Promise<b
   if (s.running) return false;
   const runId = `run-${++runCount}`;
   const focus = focusIds ?? s.disputes.filter((d) => d.status === 'open').map((d) => d.id);
+  captureBaseline();
+  // What the run must not make worse, and the state to return to if it does.
+  const lateAtStart = new Set(s.counters.unplaced);
+  const checkpoint = structuredClone(s.disputes);
   setRunning(true);
   try {
     const useGemini = Boolean(process.env.GEMINI_API_KEY);
@@ -276,6 +282,23 @@ export async function runAgent(trigger: Trigger, focusIds?: string[]): Promise<b
     // Anything Gemini left undone (or everything, when offline) is finished by rule.
     const leftover = openFocus(focus).filter((d) => needsWork(d) || (d.decision === 'fight' && !d.pendingAction));
     if (leftover.length) await heuristicRun(leftover.map((d) => d.id), { runId, by: 'heuristic' });
+
+    // Run-level guarantee: no dispute that was on time when the run began may end up late.
+    const pushedLate = () => store().disputes.filter((d) => d.status === 'open' && d.state === 'late' && !lateAtStart.has(d.id));
+    if (pushedLate().length) await heuristicRun(pushedLate().map((d) => d.id), { runId, by: 'heuristic' });
+    const broken = pushedLate();
+    if (broken.length) {
+      store().disputes = checkpoint;
+      await replan();
+      logAction({
+        runId,
+        by: 'system',
+        tool: 'rollback',
+        args: {},
+        ok: false,
+        message: `Run rolled back: it would have left ${broken.map((d) => d.id).join(', ')} past the deadline. Engine conflict: ${broken[0].conflict}. Nothing was changed; this needs you`,
+      });
+    }
 
     const c = store().counters;
     logAction({

@@ -13,14 +13,19 @@ export interface Worker {
 
 export type EvidenceSource = 'signature' | 'delivery_photo' | 'tracking' | 'chat_log' | 'listing_photos';
 
-/** How long it takes to obtain each kind of proof, in working minutes. */
-export const EVIDENCE_SOURCES: Record<EvidenceSource, { label: string; minutes: number }> = {
-  signature: { label: 'Carrier signature', minutes: 240 },
-  delivery_photo: { label: 'Delivery photo', minutes: 30 },
-  tracking: { label: 'Tracking record', minutes: 45 },
-  chat_log: { label: 'Buyer chat log', minutes: 30 },
-  listing_photos: { label: 'Listing photos', minutes: 60 },
+/**
+ * What each kind of proof costs. workMin is hands-on time for a person; waitMin is time spent
+ * waiting on someone else (the carrier), during which that person is free for other work.
+ */
+export const EVIDENCE_SOURCES: Record<EvidenceSource, { label: string; workMin: number; waitMin: number }> = {
+  signature: { label: 'Carrier signature', workMin: 15, waitMin: 240 },
+  delivery_photo: { label: 'Delivery photo', workMin: 30, waitMin: 0 },
+  tracking: { label: 'Tracking record', workMin: 30, waitMin: 0 },
+  chat_log: { label: 'Buyer chat log', workMin: 30, waitMin: 0 },
+  listing_photos: { label: 'Listing photos', workMin: 45, waitMin: 0 },
 };
+
+export const evidenceMinutes = (source: EvidenceSource) => EVIDENCE_SOURCES[source].workMin + EVIDENCE_SOURCES[source].waitMin;
 
 export type TaskKind = 'proof' | 'assemble' | 'submit' | 'resolve';
 
@@ -32,8 +37,12 @@ export interface ChainTask {
   kind: TaskKind;
   name: string;
   durationMin: number;
+  /** Waiting time after this step before its successors may start (dependency lag). */
+  waitAfterMin?: number;
   workerId: string;
   dependsOn: string[];
+  /** Position in its worker's queue, written by the planner. */
+  laneSeq?: number;
   /** Earliest start requested by a human drag or an agent moveBlock. */
   pinnedStart?: WallTime;
   pinnedBy?: 'human' | 'agent';
@@ -138,6 +147,10 @@ export interface Counters {
 export interface Snapshot {
   version: number;
   now: WallTime;
+  /** The moment the plan starts from (now, rounded up to the planning grid). */
+  planFrom: WallTime;
+  /** Task dates as they were before the current or last agent run: task id -> [start, end]. */
+  baseline: Record<string, [WallTime, WallTime]>;
   demo: boolean;
   agentMode: 'gemini' | 'offline';
   agentModel?: string;
