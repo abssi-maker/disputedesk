@@ -93,6 +93,7 @@ function LogEntry({ action, onSelect }: { action: AgentAction; onSelect: (id: st
           </button>
         )}
       </div>
+      {!quiet && <p className="entry-tool">{action.tool}</p>}
       <p className="entry-what">
         {!action.ok && <b>Rejected. </b>}
         {what}
@@ -137,11 +138,13 @@ function TellAgent({ running }: { running: boolean }) {
         void send(text);
       }}
     >
-      <label htmlFor="tell">Tell the agent</label>
+      <h2>
+        <label htmlFor="tell">Tell the agent</label>
+      </h2>
       <div className="tell-row">
         <input id="tell" value={text} onChange={(e) => setText(e.target.value)} placeholder="Maya leaves at 2pm today" maxLength={280} disabled={running} data-testid="tell" />
-        <button className="btn btn-ink" disabled={running || !text.trim()}>
-          Send
+        <button className="tell-send" disabled={running || !text.trim()} aria-label="Send to the agent">
+          →
         </button>
       </div>
       <div className="tell-chips">
@@ -165,7 +168,7 @@ function FlightLog({ actions, running, onSelect }: { actions: AgentAction[]; run
   return (
     <section className="rail-section" data-testid="agent-log">
       <header className="rail-head">
-        <h2>Agent log</h2>
+        <h2 className="rail-title">Agent log</h2>
         <span className={`live-dot${running ? ' is-running' : ''}`}>{running ? 'agent working' : 'idle'}</span>
       </header>
       {actions.length === 0 ? (
@@ -305,7 +308,7 @@ function Guardrails({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="guard">
       <button className="btn btn-line" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        Agent acts alone ≤ {usd(autoResolveLimitUsd)}
+        Acts alone ≤ {usd(autoResolveLimitUsd)}
       </button>
       {open && (
         <div className="pop" data-testid="policy">
@@ -350,61 +353,77 @@ export default function Desk({ demo }: { demo: boolean }) {
     <main className="desk" data-running={snapshot.running} data-version={snapshot.version}>
       <header className="top">
         <div className="mark">
-          <h1>DisputeDesk</h1>
-          <p>Every PayPal dispute lands before its deadline</p>
+          <svg className="mark-icon" viewBox="0 0 40 40" aria-hidden>
+            <circle cx="20" cy="20" r="13" fill="none" stroke="currentColor" strokeWidth="3" />
+            <path d="M20 2v12M20 26v12M2 20h12M26 20h12" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <div>
+            <h1>DisputeDesk</h1>
+            <p>Every dispute lands before its deadline</p>
+            <p className="status">
+              <span data-testid="agent-badge" className={snapshot.agentMode === 'gemini' ? '' : 'warn'} title={snapshot.agentModel}>
+                {snapshot.agentMode === 'gemini' ? 'Gemini agent' : 'Offline agent (no Gemini key)'}
+              </span>
+              {' · '}
+              <span className={snapshot.paypal === 'configured' ? '' : 'warn'}>{snapshot.paypal === 'configured' ? 'PayPal sandbox' : 'PayPal not configured'}</span>
+              {' · '}
+              <span>
+                {snapshot.demo ? 'Demo clock' : 'Clock'} {snapshot.now.slice(11)}
+              </span>
+              {!connected && <span className="warn"> · reconnecting</span>}
+            </p>
+          </div>
         </div>
 
         <div className="figures">
           <Figure value={counters.atRiskUsd} label="At risk" tone="risk" testId="at-risk" />
           <Figure value={counters.protectedUsd} label="On course" tone="kept" testId="protected" />
           <Figure value={counters.resolvedUsd} label="Closed" tone="closed" testId="resolved" />
-          <div className="figure figure-next">
-            <span className="figure-label">Next deadline</span>
-            <span className="figure-value">{next && nextLeft > 0 ? duration(nextLeft) : '—'}</span>
-            {next && <span className="figure-note">{next.disputeId}</span>}
+          <div className="disc" title={next ? `Next PayPal deadline: ${next.disputeId}` : undefined}>
+            <span>Next deadline</span>
+            <strong>{next && nextLeft > 0 ? duration(nextLeft) : '—'}</strong>
+            {next && <em>{next.disputeId}</em>}
           </div>
         </div>
 
         <div className="controls">
-          <div className="status">
-            <span className={snapshot.agentMode === 'gemini' ? 'ok' : 'warn'} data-testid="agent-badge">
-              {snapshot.agentMode === 'gemini' ? `Gemini · ${snapshot.agentModel}` : 'Offline agent (no Gemini key)'}
-            </span>
-            <span className={snapshot.paypal === 'configured' ? 'ok' : 'warn'}>{snapshot.paypal === 'configured' ? 'PayPal sandbox' : 'PayPal not configured'}</span>
-            <span className={snapshot.demo ? 'sim' : 'ok'}>
-              {snapshot.demo ? 'Demo clock' : 'Clock'} {snapshot.now.slice(11)}
-            </span>
-            {!connected && <span className="warn">reconnecting</span>}
-          </div>
-          <div className="buttons">
-            <Guardrails snapshot={snapshot} />
-            <button className="btn btn-line btn-sim" onClick={() => void post('/api/simulate')} disabled={snapshot.running} data-testid="simulate">
+          <button className="btn btn-primary" onClick={() => void post('/api/agent/run')} disabled={snapshot.running} data-testid="plan">
+            {snapshot.running ? 'Agent working…' : 'Plan with agent'}
+          </button>
+          {/* A repeatable demo event; outside demo mode the board shows real PayPal sandbox disputes only. */}
+          {snapshot.demo && (
+            <button className="btn btn-outline" onClick={() => void post('/api/simulate')} disabled={snapshot.running} data-testid="simulate">
               Simulate a dispute
             </button>
-            <button className="btn btn-ink" onClick={() => void post('/api/agent/run')} disabled={snapshot.running} data-testid="plan">
-              {snapshot.running ? 'Agent working…' : 'Plan with agent'}
-            </button>
-          </div>
+          )}
+          <Guardrails snapshot={snapshot} />
         </div>
       </header>
 
       <div className="body">
         <div className="main">
+          <div className="section">
+            <h2>Live flight plan</h2>
+            <span>
+              {snapshot.disputes.length} disputes / {snapshot.demo ? '2' : 'next'} working days
+            </span>
+            <em>All times local</em>
+          </div>
           <Board snapshot={snapshot} selectedId={selectedId} focusId={focusId} onSelect={setSelectedId} onOverride={onOverride} />
           <footer className="key">
             <span>
-              <i className="sw sw-step" /> work
+              <i className="sw sw-work" /> = Work (scheduled, on time)
             </span>
             <span>
-              <i className="sw sw-wait" /> waiting on carrier, nobody booked
+              <i className="sw sw-wait" /> = Waiting on carrier · nobody booked
             </span>
             <span>
-              <i className="sw sw-ghost" /> before the agent moved it
+              <i className="sw sw-prev" /> = Previous plan
             </span>
             <span>
-              <i className="sw sw-zone" /> past the PayPal deadline
+              <i className="sw sw-zone" /> = Past PayPal deadline (no-fly zone)
             </span>
-            <span className="key-note">Drag or stretch a step to overrule the agent. The scheduling engine re-plans everything else.</span>
+            <span className="key-note">Drag a step. The agent replans everything else.</span>
           </footer>
         </div>
         <aside className="rail">
