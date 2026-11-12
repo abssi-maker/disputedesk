@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: disputedesk
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
+      # Public URL of this service; PayPal webhooks point at <APP_BASE_URL>/api/webhooks/paypal
+      - key: APP_BASE_URL
+        sync: false
+      # Gemini (agent)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.8-flash
+      # PayPal sandbox
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      # Agent guardrail: disputes at or under this amount (USD) may be auto-resolved
+      - key: AUTO_RESOLVE_LIMIT_USD
+        value: "50"
+      # Only needed once the build switches from the Bryntum trial package to the licensed registry
+      - key: BRYNTUM_NPM_TOKEN
+        sync: false
