@@ -32,7 +32,7 @@ const SEEDS: Template[] = [
   {
     id: 'D-4821',
     buyer: 'Jordan Reyes',
-    item: 'Wireless noise-cancelling headphones',
+    item: 'Used 35mm film camera',
     amount: 289,
     reason: 'Item not received',
     facts: ['Carrier shows delivered 3 days ago', 'Signature on file with carrier', 'Driver delivery photo available'],
@@ -44,10 +44,10 @@ const SEEDS: Template[] = [
   {
     id: 'D-4830',
     buyer: 'Priya Natarajan',
-    item: 'Ceramic pour-over coffee set',
+    item: 'Leather camera strap',
     amount: 64.5,
     reason: 'Item not as described',
-    facts: ['Buyer says colour differs from listing', 'Listing photos show the same glaze', 'Buyer chat confirms correct item'],
+    facts: ['Buyer says colour differs from listing', 'Listing photos show the same leather colour', 'Buyer chat confirms correct item'],
     deadlineInHours: 12,
     assignedTo: 'maya',
     evidenceReadiness: 0.7,
@@ -57,7 +57,7 @@ const SEEDS: Template[] = [
   {
     id: 'D-4833',
     buyer: 'Marcus Bell',
-    item: 'Clear phone case',
+    item: '52mm UV lens filter',
     amount: 18.99,
     reason: 'Item not received',
     facts: ['Sent by untracked letter post', 'No delivery confirmation exists'],
@@ -69,7 +69,7 @@ const SEEDS: Template[] = [
   {
     id: 'D-4840',
     buyer: 'Elena Kovacs',
-    item: 'Standing desk frame',
+    item: 'Used mirrorless camera body',
     amount: 412,
     reason: 'Unauthorized transaction',
     facts: ['Shipped to the address on the PayPal account', 'Tracking shows delivered', 'Carrier signature can be requested'],
@@ -81,10 +81,10 @@ const SEEDS: Template[] = [
   {
     id: 'D-4847',
     buyer: 'Tom Okafor',
-    item: 'Graphic cotton t-shirt',
+    item: 'Lens hood and cap set',
     amount: 32,
     reason: 'Item not as described',
-    facts: ['Buyer sent a photo of a print defect', 'Chat log shows seller acknowledged the defect'],
+    facts: ['Buyer sent a photo of a cracked lens hood', 'Chat log shows seller acknowledged the crack'],
     deadlineInHours: 14,
     assignedTo: 'maya',
     evidenceReadiness: 0.2,
@@ -94,7 +94,7 @@ const SEEDS: Template[] = [
   {
     id: 'D-4852',
     buyer: 'Sofia Marin',
-    item: 'Espresso grinder',
+    item: 'Carbon fibre travel tripod',
     amount: 149,
     reason: 'Item not received',
     facts: ['Tracking shows delivered to parcel locker', 'Carrier signature can be requested'],
@@ -107,7 +107,7 @@ const SEEDS: Template[] = [
   {
     id: 'D-4858',
     buyer: 'Liam Chen',
-    item: 'Mechanical keyboard',
+    item: 'Speedlight flash',
     amount: 95,
     reason: 'Credit not processed',
     facts: ['Buyer returned the item', 'Chat log shows the refund was issued 6 days ago'],

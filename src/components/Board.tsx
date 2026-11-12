@@ -99,8 +99,8 @@ const PEOPLE_STATIC = {
   ...OFF,
   workingTime: { fromHour: 9, toHour: 17 },
   viewPreset: VIEW_PRESET,
-  rowHeight: 46,
-  barMargin: 7,
+  rowHeight: 52,
+  barMargin: 9,
   eventLayout: 'none' as const,
   transition: { changeEvent: 500 },
   eventMenuFeature: false,
@@ -113,6 +113,9 @@ const PEOPLE_STATIC = {
   timeRangesFeature: false,
 } as const;
 
+/** Illustrated avatars (generated for this app, fictional people). */
+const AVATAR: Record<string, string> = { owner: '/avatars/owner.png', maya: '/avatars/maya.png', auto: '/avatars/agent.png' };
+
 const PEOPLE_COLUMNS = [
   {
     text: 'People / capacity',
@@ -121,8 +124,14 @@ const PEOPLE_COLUMNS = [
     renderer: ({ record }: { record: Model }): DomConfig => ({
       className: 'dd-person',
       children: [
-        { tag: 'strong', text: record.get('name') },
-        { tag: 'span', text: ` / ${record.get('role')}` },
+        { tag: 'img', className: 'dd-avatar', src: AVATAR[String(record.id)], alt: '' },
+        {
+          className: 'dd-person-text',
+          children: [
+            { tag: 'strong', text: record.get('name') },
+            { tag: 'span', text: record.get('role') },
+          ],
+        },
       ],
     }),
   },
@@ -178,7 +187,9 @@ function columns(disputes: React.RefObject<Map<string, Dispute>>): GridColumnCon
             className: 'dd-cell-step',
             children: [
               { tag: 'span', text: record.get('role') === 'wait' ? 'Waiting on carrier' : record.get('name') },
-              { tag: 'span', className: `dd-who${worker ? '' : ' dd-who-none'}`, text: worker ? WORKER_TAG[worker] : 'NOBODY' },
+              worker
+                ? { className: 'dd-who', children: [{ tag: 'img', className: 'dd-avatar-sm', src: AVATAR[worker], alt: '' }, { tag: 'span', text: WORKER_TAG[worker] }] }
+                : { tag: 'span', className: 'dd-who dd-who-none', text: 'NOBODY' },
             ],
           };
         }
