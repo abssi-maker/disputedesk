@@ -106,7 +106,7 @@ code {
 }
 
 .board {
-  height: 384px;
+  height: 352px;
   flex: none;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -785,12 +785,59 @@ code {
   transition: background-color 0.5s, border-color 0.5s, color 0.5s;
 }
 
+.b-sch-event.dd-ev {
+  justify-content: flex-start;
+  padding-inline: 7px;
+  overflow: hidden;
+}
+
 .b-sch-event.dd-ev .b-sch-event-content {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  line-height: 1.2;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
   min-width: 0;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.dd-ev-icon {
+  flex: none;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.b-sch-event.dd-ev .b-sch-event-content > .dd-ev-icon:only-child {
+  margin-inline: auto;
+}
+
+.dd-ev-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dd-tip {
+  display: grid;
+  gap: 4px;
+  max-width: 300px;
+  font-size: 13px;
+}
+
+.dd-tip h4,
+.dd-tip p {
+  margin: 0;
+}
+
+.dd-tip-late {
+  color: var(--late);
+}
+.dd-tip-tight {
+  color: var(--tight);
+}
+.dd-tip-safe {
+  color: var(--safe);
 }
 
 .dd-ev-id {
@@ -800,7 +847,7 @@ code {
 }
 
 .dd-ev-name {
-  font-size: 13px;
+  font-size: 12.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -879,4 +926,38 @@ code {
 .b-sch-time-range.dd-now {
   border-inline-start: 2px solid var(--accent);
   color: var(--accent);
+}
+
+/* Deadline flags in the time axis header */
+.b-time-ranges-header-canvas .b-sch-time-range.dd-deadline,
+.b-time-ranges-header-canvas .b-sch-time-range.dd-now {
+  border: 0;
+  background: none;
+}
+
+.b-time-ranges-header-canvas .b-sch-time-range label {
+  padding: 1px 6px;
+  border-radius: 0 6px 6px 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  background: var(--resolved-bg);
+  color: var(--text);
+}
+
+.b-time-ranges-header-canvas .dd-deadline.dd-late label {
+  background: var(--late);
+  color: #23070a;
+}
+.b-time-ranges-header-canvas .dd-deadline.dd-tight label {
+  background: var(--tight);
+  color: #2a1c02;
+}
+.b-time-ranges-header-canvas .dd-deadline.dd-safe label {
+  background: var(--safe-bg);
+  color: var(--safe);
+}
+.b-time-ranges-header-canvas .dd-now label {
+  background: var(--accent);
+  color: #06101f;
 }

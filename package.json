@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:paypal": "tsx --env-file-if-exists=.env scripts/check-paypal.ts",
     "check:gemini": "tsx --env-file-if-exists=.env scripts/check-gemini.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "@bryntum/schedulerpro": "npm:@bryntum/schedulerpro-trial@^7.3.8",

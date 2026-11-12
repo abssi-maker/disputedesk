@@ -32,7 +32,7 @@ export const SOURCE_LABEL: Record<Dispute['source'], string> = {
 };
 
 export const STATE_LABEL: Record<Dispute['state'], string> = {
-  late: 'Misses deadline',
+  late: 'Late',
   tight: 'Tight',
   safe: 'On time',
   resolved: 'Resolved',

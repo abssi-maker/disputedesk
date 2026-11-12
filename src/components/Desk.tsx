@@ -354,7 +354,13 @@ export default function Desk({ demo }: { demo: boolean }) {
       <div className="body">
         <div className="main">
           <div className="board">
-            <Board snapshot={snapshot} selectedId={selectedId} onSelect={setSelectedId} onOverride={onOverride} />
+            <Board
+              snapshot={snapshot}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onOverride={onOverride}
+              focusId={snapshot.running ? (snapshot.actions.findLast((x) => x.disputeId)?.disputeId ?? null) : null}
+            />
           </div>
           <div className="legend">
             <span><i className="dot dot-late" /> Misses deadline</span>
