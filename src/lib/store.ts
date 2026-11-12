@@ -56,7 +56,6 @@ function create(demo: boolean): Store {
     listeners: g.__disputeDeskStore?.listeners ?? new Set(),
   };
   s.disputes = seedDisputes(planFrom(s));
-  replanStore(s);
   return s;
 }
 
@@ -64,8 +63,8 @@ const nowOf = (s: Store) => s.frozenNow ?? Math.floor(instantToWallMs(new Date()
 /** Blocks are planned from the next quarter hour so bars sit on a readable grid. */
 const planFrom = (s: Store) => Math.ceil(nowOf(s) / (PLAN_GRID_MIN * MIN)) * PLAN_GRID_MIN * MIN;
 
-function replanStore(s: Store) {
-  const result = planDisputes(s.disputes, wall(planFrom(s)));
+async function replanStore(s: Store) {
+  const result = await planDisputes(s.disputes, wall(planFrom(s)));
   s.disputes = result.disputes;
   s.counters = result.counters;
 }
@@ -161,11 +160,12 @@ export function upsertPayPalDispute(raw: unknown): { dispute: Dispute; isNew: bo
 export function ensureBooted(): Promise<void> {
   const s = store();
   return (s.boot ??= (async () => {
+    await replanStore(s);
     if (!paypalConfigured()) return;
     try {
       const raws = await fetchAllDisputes();
       for (const raw of raws) upsertPayPalDispute(raw);
-      replanStore(s);
+      await replanStore(s);
       logAction({
         runId: 'boot',
         by: 'system',

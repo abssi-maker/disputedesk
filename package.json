@@ -12,10 +12,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@bryntum/scheduler": "npm:@bryntum/scheduler-trial@7.3.8",
-    "@bryntum/scheduler-react": "7.3.8",
+    "@bryntum/schedulerpro": "npm:@bryntum/schedulerpro-trial@^7.3.8",
+    "@bryntum/schedulerpro-react": "^7.3.8",
     "@google/genai": "^3.2.0",
+    "@happy-dom/global-registrator": "^21.0.4",
     "@paypal/paypal-server-sdk": "^2.5.0",
+    "happy-dom": "^21.0.4",
     "next": "^16.4.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -24,6 +26,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "playwright": "^1.65.0",
     "tsx": "^4.23.15",
     "typescript": "^5.6.0",
     "vitest": "^5.1.0"

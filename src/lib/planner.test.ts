@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildChain, splitAssemble } from './chain';
-import { computeCounters, findSlot, planDisputes, priority } from './planner';
+import { computeCounters, planDisputes, priority } from './planner';
 import { ms, addWorkingMinutes, workingMinutesBetween } from './time';
 import type { Dispute } from './types';
 
@@ -36,8 +36,13 @@ describe('working time', () => {
     expect(workingMinutesBetween(ms('2026-11-12T16:00'), ms('2026-11-13T10:00'))).toBe(120);
   });
 
-  it('never places a block across the end of the working day', () => {
-    expect(findSlot([], ms('2026-11-12T16:30'), 60)).toBe(ms('2026-11-13T09:00'));
+  it('carries work over the night instead of scheduling outside 09:00-17:00', async () => {
+    const { disputes } = await planDisputes([dispute('a', 100, '2026-11-13T16:00')], '2026-11-12T16:00');
+    expect(disputes[0].chain.map((t) => [t.start, t.end])).toEqual([
+      ['2026-11-12T16:00', '2026-11-12T16:45'],
+      ['2026-11-12T16:45', '2026-11-13T09:45'],
+      ['2026-11-13T09:45', '2026-11-13T10:15'],
+    ]);
   });
 });
 
@@ -53,8 +58,8 @@ describe('planner ordering', () => {
     expect(priority(big, now)).toBeGreaterThan(priority(unlikely, now));
   });
 
-  it('gives the highest priority dispute the earliest slot on a shared lane', () => {
-    const { disputes } = planDisputes(
+  it('gives the highest priority dispute the earliest slot on a shared lane', async () => {
+    const { disputes } = await planDisputes(
       [dispute('small', 40, '2026-11-13T12:00'), dispute('big', 400, '2026-11-13T12:00')],
       NOW,
     );
@@ -62,8 +67,8 @@ describe('planner ordering', () => {
     expect(byId(disputes, 'small').slot!.start).toBe('2026-11-12T11:15');
   });
 
-  it('keeps chain order and never overlaps blocks on one lane', () => {
-    const { disputes } = planDisputes(
+  it('keeps chain order and never overlaps blocks on one lane', async () => {
+    const { disputes } = await planDisputes(
       [dispute('a', 100, '2026-11-13T12:00'), dispute('b', 90, '2026-11-13T12:00')],
       NOW,
     );
@@ -82,58 +87,59 @@ describe('planner ordering', () => {
 });
 
 describe('deadlines', () => {
-  it('lands a placeable chain before its deadline', () => {
-    const { disputes, counters } = planDisputes([dispute('a', 100, '2026-11-12T12:00')], NOW);
+  it('lands a placeable chain before its deadline', async () => {
+    const { disputes, counters } = await planDisputes([dispute('a', 100, '2026-11-12T12:00')], NOW);
     const a = byId(disputes, 'a');
     expect(ms(a.slot!.end)).toBeLessThanOrEqual(ms(a.deadline));
     expect(a.state).toBe('safe');
     expect(counters.unplaced).toEqual([]);
   });
 
-  it('reports a chain that cannot finish in time as unplaced and late', () => {
-    const { disputes, counters } = planDisputes([dispute('a', 100, '2026-11-12T10:00')], NOW);
+  it('reports a chain that cannot finish in time as unplaced and late, with the engine conflict', async () => {
+    const { disputes, counters } = await planDisputes([dispute('a', 100, '2026-11-12T10:00')], NOW);
     const a = byId(disputes, 'a');
     expect(a.state).toBe('late');
     expect(a.slackMin).toBe(-75);
+    expect(a.conflict).toContain('Finish-No-Later-Than');
     expect(counters.unplaced).toEqual(['a']);
   });
 
-  it('marks a plan with little slack as tight', () => {
-    const { disputes } = planDisputes([dispute('a', 100, '2026-11-12T11:30')], NOW);
+  it('marks a plan with little slack as tight', async () => {
+    const { disputes } = await planDisputes([dispute('a', 100, '2026-11-12T11:30')], NOW);
     expect(byId(disputes, 'a').state).toBe('tight');
   });
 
-  it('pushes the lower priority dispute past its deadline when the lane is full', () => {
-    const { counters } = planDisputes(
+  it('pushes the lower priority dispute past its deadline when the lane is full', async () => {
+    const { counters } = await planDisputes(
       [dispute('big', 400, '2026-11-12T12:00'), dispute('small', 40, '2026-11-12T12:00')],
       NOW,
     );
     expect(counters.unplaced).toEqual(['small']);
   });
 
-  it('shortens a chain when the evidence block is split across two lanes', () => {
+  it('shortens a chain when the evidence block is split across two lanes', async () => {
     const d = dispute('a', 100, '2026-11-12T11:00');
-    expect(planDisputes([d], NOW).disputes[0].state).toBe('late');
+    expect((await planDisputes([d], NOW)).disputes[0].state).toBe('late');
     expect(splitAssemble(d, 2)).toBeNull();
     d.chain.find((t) => t.id === 'a:assemble:2')!.workerId = 'maya';
-    const after = planDisputes([d], NOW).disputes[0];
+    const after = (await planDisputes([d], NOW)).disputes[0];
     expect(after.slot!.end).toBe('2026-11-12T10:45');
     expect(after.state).not.toBe('late');
   });
 
-  it('honours a pinned start and plans other work around it', () => {
+  it('honours a pinned start and plans other work around it', async () => {
     const pinned = dispute('pinned', 40, '2026-11-13T16:00');
     pinned.chain[0].pinnedStart = '2026-11-12T09:00';
     pinned.chain[0].pinnedBy = 'human';
-    const { disputes } = planDisputes([pinned, dispute('big', 400, '2026-11-13T16:00')], NOW);
+    const { disputes } = await planDisputes([pinned, dispute('big', 400, '2026-11-13T16:00')], NOW);
     expect(byId(disputes, 'pinned').chain[0].start).toBe('2026-11-12T09:00');
     expect(byId(disputes, 'big').slot!.start).toBe('2026-11-12T09:45');
   });
 });
 
 describe('counters', () => {
-  it('splits dollars into at risk, protected and resolved', () => {
-    const { disputes, counters } = planDisputes(
+  it('splits dollars into at risk, protected and resolved', async () => {
+    const { disputes, counters } = await planDisputes(
       [
         dispute('late', 100, '2026-11-12T09:30'),
         dispute('safe', 250, '2026-11-13T16:00'),

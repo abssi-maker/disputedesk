@@ -1,8 +1,9 @@
-export default function Home() {
-  return (
-    <main style={{ padding: 32 }}>
-      <h1>DisputeDesk</h1>
-      <p>Air traffic control for PayPal seller disputes. Under construction.</p>
-    </main>
-  );
+import Desk from '@/components/Desk';
+
+export const dynamic = 'force-dynamic';
+
+/** `/?demo=1` resets the board to the scripted demo state. */
+export default async function Home({ searchParams }: { searchParams: Promise<{ demo?: string }> }) {
+  const { demo } = await searchParams;
+  return <Desk demo={demo === '1'} />;
 }

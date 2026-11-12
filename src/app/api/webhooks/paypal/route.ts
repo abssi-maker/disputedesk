@@ -1,4 +1,5 @@
 import { verifyWebhookSignature } from '@/lib/paypal-rest';
+import { handleDisputeEvent } from '@/lib/webhook';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,9 +42,15 @@ export async function POST(req: Request) {
   log.length = Math.min(log.length, 50);
   console.log('[paypal-webhook]', JSON.stringify(entry));
 
-  // Unverified events (e.g. from the dashboard simulator) are logged but must never trigger agent actions.
-  // Always answer 200 quickly so PayPal does not retry; processing happens elsewhere.
-  return Response.json({ received: true, verified });
+  // Unverified events (e.g. from the dashboard simulator) are logged but never trigger agent actions.
+  // The agent run itself is not awaited, so PayPal gets its 200 quickly and does not retry.
+  let agentTriggered = false;
+  try {
+    ({ agentTriggered } = await handleDisputeEvent(event, verified));
+  } catch (e) {
+    console.error('[paypal-webhook] handling error', (e as Error).message);
+  }
+  return Response.json({ received: true, verified, agentTriggered });
 }
 
 /** Delivery check: event types and ids only, no payloads. */

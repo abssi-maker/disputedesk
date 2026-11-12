@@ -25,6 +25,7 @@ interface Template {
   evidenceSource: EvidenceSource | null;
   evidenceAvailable: EvidenceSource[];
   assembleMin?: number;
+  assignedTo?: string;
 }
 
 const SEEDS: Template[] = [
@@ -35,7 +36,7 @@ const SEEDS: Template[] = [
     amount: 289,
     reason: 'Item not received',
     facts: ['Carrier shows delivered 3 days ago', 'Signature on file with carrier', 'Driver delivery photo available'],
-    deadlineInHours: 7,
+    deadlineInHours: 9.5,
     evidenceReadiness: 0.6,
     evidenceSource: 'signature',
     evidenceAvailable: ['signature', 'delivery_photo', 'tracking'],
@@ -47,7 +48,8 @@ const SEEDS: Template[] = [
     amount: 64.5,
     reason: 'Item not as described',
     facts: ['Buyer says colour differs from listing', 'Listing photos show the same glaze', 'Buyer chat confirms correct item'],
-    deadlineInHours: 10,
+    deadlineInHours: 12,
+    assignedTo: 'maya',
     evidenceReadiness: 0.7,
     evidenceSource: 'listing_photos',
     evidenceAvailable: ['listing_photos', 'chat_log'],
@@ -59,7 +61,7 @@ const SEEDS: Template[] = [
     amount: 18.99,
     reason: 'Item not received',
     facts: ['Sent by untracked letter post', 'No delivery confirmation exists'],
-    deadlineInHours: 5,
+    deadlineInHours: 4,
     evidenceReadiness: 0.1,
     evidenceSource: null,
     evidenceAvailable: [],
@@ -71,7 +73,7 @@ const SEEDS: Template[] = [
     amount: 412,
     reason: 'Unauthorized transaction',
     facts: ['Shipped to the address on the PayPal account', 'Tracking shows delivered', 'Carrier signature can be requested'],
-    deadlineInHours: 13,
+    deadlineInHours: 10,
     evidenceReadiness: 0.5,
     evidenceSource: 'signature',
     evidenceAvailable: ['signature', 'tracking'],
@@ -83,7 +85,8 @@ const SEEDS: Template[] = [
     amount: 32,
     reason: 'Item not as described',
     facts: ['Buyer sent a photo of a print defect', 'Chat log shows seller acknowledged the defect'],
-    deadlineInHours: 11,
+    deadlineInHours: 14,
+    assignedTo: 'maya',
     evidenceReadiness: 0.2,
     evidenceSource: 'chat_log',
     evidenceAvailable: ['chat_log'],
@@ -95,7 +98,8 @@ const SEEDS: Template[] = [
     amount: 149,
     reason: 'Item not received',
     facts: ['Tracking shows delivered to parcel locker', 'Carrier signature can be requested'],
-    deadlineInHours: 15,
+    deadlineInHours: 18,
+    assignedTo: 'maya',
     evidenceReadiness: 0.5,
     evidenceSource: 'signature',
     evidenceAvailable: ['signature', 'tracking'],
@@ -107,7 +111,7 @@ const SEEDS: Template[] = [
     amount: 95,
     reason: 'Credit not processed',
     facts: ['Buyer returned the item', 'Chat log shows the refund was issued 6 days ago'],
-    deadlineInHours: 19,
+    deadlineInHours: 22,
     evidenceReadiness: 0.8,
     evidenceSource: 'chat_log',
     evidenceAvailable: ['chat_log'],
@@ -133,7 +137,7 @@ function fromTemplate(t: Template, now: number, source: Dispute['source'], id = 
   const base = {
     id,
     merchantId: MERCHANT_ID,
-    assignedTo: 'owner',
+    assignedTo: t.assignedTo ?? 'owner',
     evidenceSource: t.evidenceSource,
   };
   return {

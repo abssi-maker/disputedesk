@@ -85,6 +85,7 @@ export interface Dispute {
   slot?: { start: WallTime; end: WallTime };
   state: PlanState;
   slackMin?: number;
+  /** The scheduling engine's own description of the deadline conflict, when the chain is late. */
   conflict?: string;
   /** Present only for source 'paypal'. */
   paypal?: { status: string; stage: string; allowedActions: string[]; updatedAt?: string };
