@@ -31,7 +31,8 @@ export async function paypalRequest<T = any>(path: string, init?: RequestInit): 
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      // FormData bodies must set their own multipart boundary.
+      ...(typeof init?.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {}),
     },
   });

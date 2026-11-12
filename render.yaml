@@ -30,6 +30,9 @@ services:
       # Agent guardrail: disputes at or under this amount (USD) may be auto-resolved
       - key: AUTO_RESOLVE_LIMIT_USD
         value: "50"
+      # Merchant time zone (IANA name); working hours are 9-17 in this zone
+      - key: MERCHANT_TZ
+        value: America/New_York
       # Only needed once the build switches from the Bryntum trial package to the licensed registry
       - key: BRYNTUM_NPM_TOKEN
         sync: false
